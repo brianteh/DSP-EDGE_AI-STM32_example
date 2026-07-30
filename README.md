@@ -55,3 +55,12 @@
 3. ```aiInit() / aiRun()```: Handles model activation allocation and synchronization with ST Edge AI runtime.
 
 # ⚙️Toolchain: STM32CubeIDE
+
+# 🛠️ ST Edge AI: <br>
+1. ```Core/Inc/STAI``` folder contains the header source files for the ST Edge AI library at ```Core/Lib/libNetworkRuntime... .a``` <br>
+2. ```Core/Inc/network & Core/Src/network``` contains the optimized embedded ML model's data
+3. Use <b><a>https://stm32ai-cs.st.com/</a></b> to get the output to be put into these folders
+4. Refer to <b><a>https://stedgeai-dc.st.com/assets/embedded-docs/embedded_client_stai_api.html#ref_quick_usage_code</a></b> for usage guide.
+
+
+
