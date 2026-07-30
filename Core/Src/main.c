@@ -60,9 +60,9 @@
 
 
 /**
- * AI
+ * AI INPUT PRE-PROCESS
  */
-#define INPUT_SCALE       (1.0f / 255.0f)
+#define INPUT_SCALE       (1.0f / 255.0f) // 1/(no. of inputs-1)
 #define INPUT_ZERO_POINT  (-128.0f)
 /* USER CODE END PD */
 
@@ -353,9 +353,9 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
 
     normalize_array_256_fast(g_fftMag);
 
-    /**
-     * PRINT TO PC VIA UART
-     */
+  /**
+   * PRINT TO PC VIA UART
+   */
 
 	// 1. Send a unique Start-of-Frame header (e.g., 2 bytes: 0xAA, 0xBB)
 	// This allows the computer to find the exact start of your array
@@ -373,7 +373,7 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
 	_write(1, (char *)footer, 2);
 }
 
-// Intercept the DMA completion interrupts to split buffer processing safely
+
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
     // First half of buffer is full (samples 0 to BLOCK_SIZE-1)
 	if (g_fftReadyFlag == 0) {
@@ -435,7 +435,6 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef* hadc)
 {
     glow++;
-
 }
 
 
@@ -528,16 +527,7 @@ int main(void)
 		  // Reset the flag to unlock the next callback interception
 		  g_fftReadyFlag = 0;
 	  }
-	  /*if (g_saiReadyFlag == 1){
-		  // Run real 512 FFT using the custom raw-filtered bits
-		  arm_rfft_fast_f32(&fftInstance, g_saiInput, g_saiOutput, 0);
-		  arm_cmplx_mag_f32(g_saiOutput, g_saiMag, 256);
-
-		  // Your clean 256-bin digital mic audio profile is ready!
-		  // No 20kHz lowpass brick-wall filtering will occur here.
-
-		  g_saiReadyFlag = 0;
-	  }*/
+	 
   }
   //aiDeinit();
   /* USER CODE END 3 */
