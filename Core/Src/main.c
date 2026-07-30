@@ -57,6 +57,13 @@
  */
 #define DMA_BUFFER_SIZE 64
 #define NS  128 // 2x of DMA BUFFER SIZE, no. of points in the sinusoidal wave
+
+
+/**
+ * AI
+ */
+#define INPUT_SCALE       (1.0f / 255.0f)
+#define INPUT_ZERO_POINT  (-128.0f)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -240,15 +247,40 @@ int aiRun(const void *in_data, void *out_data) {
   return 0;
 }
 
+void quantize_input_256(const float32_t *float_input, int8_t *int8_output) {
+    // 1. Calculate inverse scale (1 / scale) to replace division with multiplication
+    float32_t inv_scale = 1.0f / INPUT_SCALE;
+
+    // Temporary buffer for intermediate float processing
+    float32_t temp_buffer[256];
+
+    // 2. Multiply entire array by inv_scale: temp = float_input * inv_scale
+    arm_scale_f32(float_input, inv_scale, temp_buffer, 256);
+
+    // 3. Add zero-point and clip to int8 range
+    for (int i = 0; i < 256; i++) {
+        // Round to nearest integer
+        float32_t rounded = roundf(temp_buffer[i]) + INPUT_ZERO_POINT;
+
+        // Manual clipping to prevent overflow
+        if (rounded > 127.0f)  rounded = 127.0f;
+        if (rounded < -128.0f) rounded = -128.0f;
+
+        int8_output[i] = (int8_t)rounded;
+    }
+}
+
 int acquire_and_process_data(void *in_data)
 {
- /* fill the inputs of the c-model
- for (int idx=0; idx < AI_NETWORK_IN_NUM; idx++ )
- {
- in_data[idx] = ....
- }
- */
- return 0;
+	/* fill the inputs of the c-model
+	for (int idx=0; idx < AI_NETWORK_IN_NUM; idx++ )
+	{
+	in_data[idx] = ....
+	}
+	*/
+	quantize_input_256(g_fftMag, in_data);
+
+	return 0;
 }
 
 int post_process(void *out_data){
@@ -266,6 +298,29 @@ int post_process(void *out_data){
 void init_dsp(void) {
     // Initialize the Real FFT instance for a 512-point conversion
     arm_rfft_fast_init_f32(&fftInstance, BLOCK_SIZE);
+}
+
+void normalize_array_256_fast(float32_t *array) {
+    float32_t min_val, max_val;
+    uint32_t min_index, max_index;
+
+    // 1. Find min and max using hardware-accelerated vectors
+    arm_min_f32(array, 256, &min_val, &min_index);
+    arm_max_f32(array, 256, &max_val, &max_index);
+
+    float32_t range = max_val - min_val;
+
+    if (range > 0.0f) {
+        // 2. Subtract min_val from all elements: array[i] = array[i] - min_val
+        arm_offset_f32(array, -min_val, array, 256);
+
+        // 3. Multiply by (1 / range) instead of dividing inside a loop
+        float32_t inv_range = 1.0f / range;
+        arm_scale_f32(array, inv_range, array, 256);
+    } else {
+        // If all elements are equal, set entire array to 0
+        arm_fill_f32(0.0f, array, 256);
+    }
 }
 
 void process_ultrasonic_data(uint16_t *p_raw_buffer) {
@@ -296,25 +351,26 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
     // Handle the pure-real Nyquist component (stored at the end of the mag array)
     g_fftMag[BLOCK_SIZE / 2] = fabsf(g_fftOutput[1]);
 
+    normalize_array_256_fast(g_fftMag);
 
     /**
      * PRINT TO PC VIA UART
      */
 
-    // 1. Send a unique Start-of-Frame header (e.g., 2 bytes: 0xAA, 0xBB)
-      // This allows the computer to find the exact start of your array
-      uint8_t header[2] = {0xAA, 0xBB};
-      _write(1, (char *)header, 2);
+	// 1. Send a unique Start-of-Frame header (e.g., 2 bytes: 0xAA, 0xBB)
+	// This allows the computer to find the exact start of your array
+	uint8_t header[2] = {0xAA, 0xBB};
+	_write(1, (char *)header, 2);
 
-      // 2. Blast the ENTIRE float array out of memory in a single shot!
-      // No loops, no formatting math, no printf overhead.
-      uint32_t bytes_to_send = (BLOCK_SIZE / 2) * sizeof(float32_t);
-      _write(1, (char *)g_fftMag, bytes_to_send);
+	// 2. Blast the ENTIRE float array out of memory in a single shot!
+	// No loops, no formatting math, no printf overhead.
+	uint32_t bytes_to_send = (BLOCK_SIZE / 2) * sizeof(float32_t);
+	_write(1, (char *)g_fftMag, bytes_to_send);
 
-      // 3. Send an End-of-Frame footer (e.g., 2 bytes: 0xCC, 0xDD)
-      // This acts as a validation check for the PC
-      uint8_t footer[2] = {0xCC, 0xDD};
-      _write(1, (char *)footer, 2);
+	// 3. Send an End-of-Frame footer (e.g., 2 bytes: 0xCC, 0xDD)
+	// This acts as a validation check for the PC
+	uint8_t footer[2] = {0xCC, 0xDD};
+	_write(1, (char *)footer, 2);
 }
 
 // Intercept the DMA completion interrupts to split buffer processing safely
@@ -440,10 +496,10 @@ int main(void)
 
 
 
-  /** Test FFT with sinusoidal wave: sinusoidal wave frequency = trigger frequency(TIM6)/NS */
-  //HAL_TIM_Base_Start_IT(&htim6);
+  /** Test FFT with sinusoidal wave: sinusoidal wave frequency = trigger frequency/NS */
+  HAL_TIM_Base_Start_IT(&htim6);
 
-  //HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, (uint32_t*) Wave_LUT, NS, DAC_ALIGN_12B_R);
+  HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, (uint32_t*) Wave_LUT, NS, DAC_ALIGN_12B_R);
 
 
   while (1)
