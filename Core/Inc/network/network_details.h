@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    network.h
-  * @date    2026-07-29T04:48:25+0000
+  * @date    2026-08-05T08:45:57+0000
   * @brief   ST.AI Tool Automatic Code Generator for Embedded NN computing
   ******************************************************************************
   * @attention
@@ -22,19 +22,19 @@
 
 const stai_network_details g_network_details = {
   .tensors = (const stai_tensor[14]) {
-   { .size_bytes = 256, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {3, (const int32_t[3]){1, 256, 1}}, .scale = {1, (const float[1]){0.003921568859368563}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "serving_default_input_layer_20_output" },
-   { .size_bytes = 8064, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 252, 32}}, .scale = {1, (const float[1]){0.0018245992250740528}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "conv2d_1_output" },
-   { .size_bytes = 4032, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 126, 32}}, .scale = {1, (const float[1]){0.0018245992250740528}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "pool_4_output" },
-   { .size_bytes = 4032, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 126, 32}}, .scale = {1, (const float[1]){0.022293981164693832}}, .zeropoint = {1, (const int16_t[1]){-70}}, .name = "eltwise_5_output" },
-   { .size_bytes = 4032, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 126, 32}}, .scale = {1, (const float[1]){0.017721092328429222}}, .zeropoint = {1, (const int16_t[1]){-55}}, .name = "eltwise_6_output" },
-   { .size_bytes = 7808, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 122, 64}}, .scale = {1, (const float[1]){0.011716168373823166}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "conv2d_9_output" },
-   { .size_bytes = 3904, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 61, 64}}, .scale = {1, (const float[1]){0.011716168373823166}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "pool_12_output" },
-   { .size_bytes = 3904, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 61, 64}}, .scale = {1, (const float[1]){0.03114968352019787}}, .zeropoint = {1, (const int16_t[1]){-75}}, .name = "eltwise_13_output" },
-   { .size_bytes = 3904, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 61, 64}}, .scale = {1, (const float[1]){0.027899736538529396}}, .zeropoint = {1, (const int16_t[1]){-69}}, .name = "eltwise_14_output" },
-   { .size_bytes = 7552, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 59, 128}}, .scale = {1, (const float[1]){0.03459947928786278}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "conv2d_17_output" },
-   { .size_bytes = 128, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {3, (const int32_t[3]){1, 1, 128}}, .scale = {1, (const float[1]){0.02682272344827652}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "pool_19_output" },
-   { .size_bytes = 64, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {2, (const int32_t[2]){1, 64}}, .scale = {1, (const float[1]){0.06413274258375168}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "gemm_20_output" },
-   { .size_bytes = 1, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {2, (const int32_t[2]){1, 1}}, .scale = {1, (const float[1]){0.16404376924037933}}, .zeropoint = {1, (const int16_t[1]){18}}, .name = "gemm_21_output" },
+   { .size_bytes = 131, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {3, (const int32_t[3]){1, 131, 1}}, .scale = {1, (const float[1]){0.0008917094091884792}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "serving_default_input_layer_20_output" },
+   { .size_bytes = 4064, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 127, 32}}, .scale = {1, (const float[1]){0.00027663636137731373}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "conv2d_1_output" },
+   { .size_bytes = 2016, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 63, 32}}, .scale = {1, (const float[1]){0.00027663636137731373}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "pool_4_output" },
+   { .size_bytes = 2016, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 63, 32}}, .scale = {1, (const float[1]){0.011086185462772846}}, .zeropoint = {1, (const int16_t[1]){-67}}, .name = "eltwise_5_output" },
+   { .size_bytes = 2016, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 63, 32}}, .scale = {1, (const float[1]){0.008336790837347507}}, .zeropoint = {1, (const int16_t[1]){-47}}, .name = "eltwise_6_output" },
+   { .size_bytes = 3776, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 59, 64}}, .scale = {1, (const float[1]){0.007413871120661497}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "conv2d_9_output" },
+   { .size_bytes = 1856, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 29, 64}}, .scale = {1, (const float[1]){0.007413871120661497}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "pool_12_output" },
+   { .size_bytes = 1856, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 29, 64}}, .scale = {1, (const float[1]){0.06764340400695801}}, .zeropoint = {1, (const int16_t[1]){-103}}, .name = "eltwise_13_output" },
+   { .size_bytes = 1856, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 29, 64}}, .scale = {1, (const float[1]){0.06677153706550598}}, .zeropoint = {1, (const int16_t[1]){-102}}, .name = "eltwise_14_output" },
+   { .size_bytes = 3456, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {4, (const int32_t[4]){1, 1, 27, 128}}, .scale = {1, (const float[1]){0.1057518720626831}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "conv2d_17_output" },
+   { .size_bytes = 128, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {3, (const int32_t[3]){1, 1, 128}}, .scale = {1, (const float[1]){0.02369517646729946}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "pool_19_output" },
+   { .size_bytes = 64, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {2, (const int32_t[2]){1, 64}}, .scale = {1, (const float[1]){0.04072719067335129}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "gemm_20_output" },
+   { .size_bytes = 1, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {2, (const int32_t[2]){1, 1}}, .scale = {1, (const float[1]){0.200651153922081}}, .zeropoint = {1, (const int16_t[1]){-88}}, .name = "gemm_21_output" },
    { .size_bytes = 1, .flags = (STAI_FLAG_HAS_BATCH|STAI_FLAG_CHANNEL_LAST), .format = STAI_FORMAT_S8, .shape = {2, (const int32_t[2]){1, 1}}, .scale = {1, (const float[1]){0.00390625}}, .zeropoint = {1, (const int16_t[1]){-128}}, .name = "nl_22_output" }
   },
   .nodes = (const stai_node_details[13]){

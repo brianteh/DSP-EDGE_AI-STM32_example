@@ -41,7 +41,7 @@
 #define ADC_BUF_SIZE (BLOCK_SIZE * 2)
 #define FFT_BINS     (BLOCK_SIZE / 2)   // half of block size always, each bin represents = sampling frequency/no. of bins
 
-
+#define MAG_SIZE (BLOCK_SIZE / 2)
 /**
  * UART
  */
@@ -62,8 +62,20 @@
 /**
  * AI INPUT PRE-PROCESS
  */
-#define INPUT_SCALE       (1.0f / 255.0f) // 1/(no. of inputs-1)
+#define INPUT_SCALE       (1.0f / 511.0f) // 1/(no. of inputs-1)
 #define INPUT_ZERO_POINT  (-128.0f)
+
+
+/**
+ * SAI
+ */
+
+#define DECIMATION_FACTOR   16
+#define PCM_BLOCK_SIZE      64    // 64 PCM output samples per DMA interrupt
+#define PDM_BUF_SIZE        (PCM_BLOCK_SIZE * DECIMATION_FACTOR * 2) // 2048 words
+#define SAI_FFT_SIZE          512
+#define SAI_FFT_MAG_SIZE      ((SAI_FFT_SIZE / 2) + 1) // 257 bins (DC to Nyquist)
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -122,7 +134,8 @@ volatile uint16_t g_adcBuffer[ADC_BUF_SIZE];
 float32_t g_dspInput[BLOCK_SIZE];
 float32_t g_fftOutput[BLOCK_SIZE]; // Real/Imaginary pairs (Size must match FFT needs)
 float32_t g_fftMag[BLOCK_SIZE/2 + 1];
-//float32_t g_hanningWindow[BLOCK_SIZE];
+float32_t g_hannWindow[BLOCK_SIZE];
+
 
 // Threads synchronization variables
 volatile uint8_t g_fftReadyFlag = 0;
@@ -134,7 +147,16 @@ uint16_t *gp_activeAdcData = NULL; // Points to the stable half buffer
  * FFT
  */
 arm_rfft_fast_instance_f32 fftInstance;
+arm_rfft_fast_instance_f32 saiFftInstance;
 
+
+/* Global storage for the historical average */
+float32_t g_fftMagAverage[MAG_SIZE + 1];
+uint8_t g_isFirstRun = 1;
+
+/* Smoothing settings: 0.15 gives a steady, calm floor while tracking 30k-40kHz peaks */
+const float32_t ALPHA = 0.15f;
+const float32_t ONE_MINUS_ALPHA = 1.0f - 0.15f;
 
 /**
  * UART
@@ -164,6 +186,20 @@ uint32_t Wave_LUT[NS] = {
     234, 283, 336, 394, 456, 521, 591, 664, 740, 820, 902, 987, 1075, 1166, 1258,
     1353, 1449, 1546, 1645, 1745, 1845, 1946, 2047
 };
+
+
+
+
+/**
+ * SAI
+ */
+uint16_t PDM_RxBuffer[PDM_BUF_SIZE];
+float32_t g_saiInput[PCM_BLOCK_SIZE * 8];
+float32_t g_saiOutput[PCM_BLOCK_SIZE * 8];
+float32_t g_saiMag[(PCM_BLOCK_SIZE * 8 / 2) + 1];
+uint16_t g_saiSampleCount = 0;
+volatile uint8_t g_saiReadyFlag = 0;
+
 
 /* USER CODE END PV */
 
@@ -295,9 +331,18 @@ int post_process(void *out_data){
  * START - FFT DSP
  */
 
+
+// 2. Call this initialization function ONCE at startup (e.g., inside main())
+void init_ultrasonic_window(void) {
+    for (int i = 0; i < BLOCK_SIZE; i++) {
+        // Hann window formula: 0.5 * (1 - cos(2 * pi * i / (N - 1)))
+        g_hannWindow[i] = 0.5f * (1.0f - arm_cos_f32(2.0f * PI * (float32_t)i / (float32_t)(BLOCK_SIZE - 1)));
+    }
+}
 void init_dsp(void) {
     // Initialize the Real FFT instance for a 512-point conversion
     arm_rfft_fast_init_f32(&fftInstance, BLOCK_SIZE);
+    arm_rfft_fast_init_f32(&saiFftInstance, SAI_FFT_SIZE);
 }
 
 void normalize_array_256_fast(float32_t *array) {
@@ -322,7 +367,7 @@ void normalize_array_256_fast(float32_t *array) {
         arm_fill_f32(0.0f, array, 256);
     }
 }
-
+// Analog Mic
 void process_ultrasonic_data(uint16_t *p_raw_buffer) {
     float32_t dcBias = 0.0f;
 
@@ -336,6 +381,8 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
 
     // 3. Subtract the DC offset from the entire vector in one shot
     arm_offset_f32(g_dspInput, -dcBias, g_dspInput, BLOCK_SIZE);
+
+    arm_mult_f32(g_dspInput, g_hannWindow, g_dspInput, BLOCK_SIZE);
 
     // 4. Execute CMSIS-DSP Real FFT
     // Note: g_dspInput will be modified/destroyed during execution
@@ -351,8 +398,39 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
     // Handle the pure-real Nyquist component (stored at the end of the mag array)
     g_fftMag[BLOCK_SIZE / 2] = fabsf(g_fftOutput[1]);
 
-    normalize_array_256_fast(g_fftMag);
 
+
+    // ==========================================
+    // NEW STEP: EXPONENTIAL MOVING AVERAGING
+    // ==========================================
+    if (g_isFirstRun) {
+        // Seed the history buffer on the very first frame
+        arm_copy_f32(g_fftMag, g_fftMagAverage, MAG_SIZE);
+        g_isFirstRun = 0;
+    } else {
+    	// Used in-place stack
+    	// use g_dspInput as scratch pad for temp_current
+        //float32_t temp_current[MAG_SIZE];
+    	// use g_fftMagAverage as scratch for temp_prev
+        //float32_t temp_prev[MAG_SIZE];
+
+        // Scale current raw frame: temp_current = g_fftMag * ALPHA
+        arm_scale_f32(g_fftMag, ALPHA, g_dspInput, MAG_SIZE);
+    	//arm_scale_f32(g_fftMag, ALPHA, temp_current, MAG_SIZE);
+
+        // Scale historical data: temp_prev = g_fftMagAverage * (1 - ALPHA)
+        arm_scale_f32(g_fftMagAverage, ONE_MINUS_ALPHA, g_fftMagAverage, MAG_SIZE);
+    	//arm_scale_f32(g_fftMagAverage, ONE_MINUS_ALPHA, temp_prev, MAG_SIZE);
+
+        // Merge them back into the history buffer: Avg = Current + Prev
+        arm_add_f32(g_dspInput, g_fftMagAverage, g_fftMagAverage, MAG_SIZE);
+    	//arm_add_f32(temp_current, temp_prev, g_fftMagAverage, MAG_SIZE);
+    }
+
+    // Copy the stable average back to g_fftMag so your normalization blocks use it
+    arm_copy_f32(g_fftMagAverage, g_fftMag, MAG_SIZE);
+
+    normalize_array_256_fast(g_fftMag);
   /**
    * PRINT TO PC VIA UART
    */
@@ -394,6 +472,82 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
 	}
 
 }
+
+//Digital Mic
+void run_custom_cic_filter(uint16_t *p_raw_pdm, float32_t *p_out_pcm, uint16_t output_length)
+{
+    // Static state variables to preserve filter history across DMA blocks
+    static int32_t integrator = 0;
+    static int32_t delay_pipeline = 0;
+
+    uint16_t pdm_word_idx = 0;
+
+    for (uint16_t i = 0; i < output_length; i++)
+    {
+        // We need exactly 16 bits of PDM data to generate 1 PCM sample (Decimation = 16)
+        // Since our SAI delivers 16-bit packed words, 1 word = 1 PCM sample slot
+        uint16_t current_word = p_raw_pdm[pdm_word_idx++];
+
+        // 1. Integrator Stage (High-Rate Loop: Loops 16 times per PCM sample)
+        for (int8_t bit = 15; bit >= 0; bit--)
+        {
+            // Extract bits from MSB to LSB matching SPH0641 stream profile
+            int32_t bit_val = (current_word >> bit) & 0x01;
+
+            // Convert unipolar 0/1 bit stream to bipolar -1/+1 wave centers
+            int32_t bipolar_val = (bit_val * 2) - 1;
+
+            integrator += bipolar_val;
+        }
+
+        // 2. Comb Stage / Decimation (Low-Rate Loop: Executes once per 16 bits)
+        int32_t comb_out = integrator - delay_pipeline;
+        delay_pipeline = integrator; // Update delay state memory
+
+        // 3. Float Conversion & Scale
+        // The maximum output amplitude of an N-stage CIC is (Decimation)^N.
+        // With Decimation=16, outputs fall between -16 and +16. Normalize to your target scale:
+        p_out_pcm[i] = ((float32_t)comb_out / 16.0f) * 2048.0f;
+    }
+}
+
+void HAL_SAI_RxHalfCpltCallback(SAI_HandleTypeDef *hsai)
+{
+    float32_t intermediate_pcm[PCM_BLOCK_SIZE];
+
+    // Process first 1024 words of the raw buffer down into 64 PCM samples
+    run_custom_cic_filter(&PDM_RxBuffer[0], intermediate_pcm, PCM_BLOCK_SIZE);
+
+    // Accumulate into the main 512 FFT matrix
+    if (g_saiReadyFlag == 0) {
+        for(int i = 0; i < PCM_BLOCK_SIZE; i++) {
+            g_saiInput[g_saiSampleCount++] = intermediate_pcm[i];
+        }
+        if (g_saiSampleCount >= 512) {
+            g_saiSampleCount = 0;
+            g_saiReadyFlag = 1; // Wake up main loop thread
+        }
+    }
+}
+
+void HAL_SAI_RxCpltCallback(SAI_HandleTypeDef *hsai)
+{
+    float32_t intermediate_pcm[PCM_BLOCK_SIZE];
+
+    // Process second 1024 words of the raw buffer
+    run_custom_cic_filter(&PDM_RxBuffer[PDM_BUF_SIZE / 2], intermediate_pcm, PCM_BLOCK_SIZE);
+
+    if (g_saiReadyFlag == 0) {
+        for(int i = 0; i < PCM_BLOCK_SIZE; i++) {
+            g_saiInput[g_saiSampleCount++] = intermediate_pcm[i];
+        }
+        if (g_saiSampleCount >= 512) {
+            g_saiSampleCount = 0;
+            g_saiReadyFlag = 1;
+        }
+    }
+}
+
 /**
  * END - FFT DSP
  */
@@ -485,7 +639,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 
   init_dsp();
-
+  init_ultrasonic_window();
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)g_adcBuffer, ADC_BUF_SIZE);
   HAL_TIM_Base_Start(&htim2);
 
@@ -496,9 +650,9 @@ int main(void)
 
 
   /** Test FFT with sinusoidal wave: sinusoidal wave frequency = trigger frequency/NS */
-  HAL_TIM_Base_Start_IT(&htim6);
+  //HAL_TIM_Base_Start_IT(&htim6);
 
-  HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, (uint32_t*) Wave_LUT, NS, DAC_ALIGN_12B_R);
+  //HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, (uint32_t*) Wave_LUT, NS, DAC_ALIGN_12B_R);
 
 
   while (1)
@@ -814,7 +968,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 679;
+  htim2.Init.Period = 1887;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -858,7 +1012,7 @@ static void MX_TIM6_Init(void)
   htim6.Instance = TIM6;
   htim6.Init.Prescaler = 0;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 24;
+  htim6.Init.Period = 169;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
