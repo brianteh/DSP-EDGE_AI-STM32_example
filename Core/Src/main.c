@@ -62,7 +62,7 @@
 /**
  * AI INPUT PRE-PROCESS
  */
-#define INPUT_SCALE       (1.0f / 511.0f) // 1/(no. of inputs-1)
+#define INPUT_SCALE       (1.0f / 255.0f) // 1/(no. of inputs-1)
 #define INPUT_ZERO_POINT  (-128.0f)
 
 
@@ -165,11 +165,13 @@ uint8_t dma_tx_buffer[TX_BUF_SIZE];
 volatile uint8_t dma_busy = 0;
 
 /**
- * Analog Watch Dog
+ * AI inference
  */
-uint32_t glow = 0;
 
-
+uint8_t  large_impulse_flag = 0;
+int8_t is_arc = -128;
+uint8_t counter = 0;
+volatile uint8_t ai_ready_flag = 1;
 /**
  * ADC
  */
@@ -278,12 +280,14 @@ int aiRun(const void *in_data, void *out_data) {
   if (ret_code != STAI_SUCCESS) {
       ret_code = stai_network_get_error(network_context);
       return -1;
-  };
+
+  }
+
 
   return 0;
 }
 
-void quantize_input_256(const float32_t *float_input, int8_t *int8_output) {
+void quantize_input(const float32_t *float_input, int8_t *int8_output) {
     // 1. Calculate inverse scale (1 / scale) to replace division with multiplication
     float32_t inv_scale = 1.0f / INPUT_SCALE;
 
@@ -294,11 +298,34 @@ void quantize_input_256(const float32_t *float_input, int8_t *int8_output) {
     arm_scale_f32(float_input, inv_scale, temp_buffer, 256);
 
     // 3. Add zero-point and clip to int8 range
-    for (int i = 0; i < 256; i++) {
+    // starts with 125 because we cut of from frequency bin 125
+    for (int i = 125; i < 256; i++) {
         // Round to nearest integer
         float32_t rounded = roundf(temp_buffer[i]) + INPUT_ZERO_POINT;
 
         // Manual clipping to prevent overflow
+        if (rounded > 127.0f)  rounded = 127.0f;
+        if (rounded < -128.0f) rounded = -128.0f;
+
+        int8_output[i-125] = (int8_t)rounded;
+    }
+}
+
+void quantize_input_2(const float32_t *float_input, int8_t *int8_output, uint32_t length) {
+    float32_t inv_scale = 1.0f / INPUT_SCALE;
+
+    // Temporary buffer sized EXACTLY to the 131 elements we actually care about
+    float32_t temp_buffer[131];
+
+    // 1. Point directly to element 125 of your source data, and only scale 131 elements
+    arm_scale_f32(&float_input[125], inv_scale, temp_buffer, length);
+
+    // 2. Add zero-point and clip directly into the output
+    for (uint32_t i = 0; i < length; i++) {
+        // Round to nearest integer
+        float32_t rounded = roundf(temp_buffer[i]) + INPUT_ZERO_POINT;
+
+        // Manual clipping to prevent int8 overflow
         if (rounded > 127.0f)  rounded = 127.0f;
         if (rounded < -128.0f) rounded = -128.0f;
 
@@ -314,12 +341,20 @@ int acquire_and_process_data(void *in_data)
 	in_data[idx] = ....
 	}
 	*/
-	quantize_input_256(g_fftMag, in_data);
+	// 3. CAST the void pointer to int8_t* so the compiler knows how to write to it
+	int8_t *dst_buffer = (int8_t *)in_data;
+
+	// Pass the float array, casted output buffer, and the exact slice size (131)
+	quantize_input_2(g_fftMag, dst_buffer, 131);
 
 	return 0;
 }
 
 int post_process(void *out_data){
+	//int8_t *outputs = (int8_t *)out_data;
+
+	//printf("%d\n",((int8_t*)out_data)[0]);
+	ai_ready_flag = 1;
 	return 0;
 }
 
@@ -399,10 +434,11 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
     g_fftMag[BLOCK_SIZE / 2] = fabsf(g_fftOutput[1]);
 
 
-
+    //arm_fill_f32(0.0f, &g_fftMag[240], MAG_SIZE - 240);
     // ==========================================
     // NEW STEP: EXPONENTIAL MOVING AVERAGING
     // ==========================================
+
     if (g_isFirstRun) {
         // Seed the history buffer on the very first frame
         arm_copy_f32(g_fftMag, g_fftMagAverage, MAG_SIZE);
@@ -430,7 +466,22 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
     // Copy the stable average back to g_fftMag so your normalization blocks use it
     arm_copy_f32(g_fftMagAverage, g_fftMag, MAG_SIZE);
 
-    normalize_array_256_fast(g_fftMag);
+    //normalize_array_256_fast(g_fftMag);
+
+
+    /*if(g_fftMag[125]>0.07f){
+    	large_impulse_flag = 1;
+    }else{
+    	counter++;
+		if(counter>254){
+			is_arc = -128;
+		}
+    }*/
+
+
+
+
+
   /**
    * PRINT TO PC VIA UART
    */
@@ -449,6 +500,8 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
 	// This acts as a validation check for the PC
 	uint8_t footer[2] = {0xCC, 0xDD};
 	_write(1, (char *)footer, 2);
+
+
 }
 
 
@@ -588,7 +641,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 //Increment counter if value into ADC buffer exceeds a threshold
 void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef* hadc)
 {
-    glow++;
+	//glow++;
 }
 
 
@@ -657,14 +710,29 @@ int main(void)
 
   while (1)
   {
-	  /* 1 - Acquire, pre-process and fill the input buffers */
-	     // acquire_and_process_data(in_data);
+	  //if(ai_ready_flag == 1){
+		  //ai_ready_flag = 0;
+		  /* 1 - Acquire, pre-process and fill the input buffers */
+		  //acquire_and_process_data(in_data);
 
-	      /* 2 - Call inference engine */
-	      //aiRun(in_data, out_data);
+		  /* 2 - Call inference engine */
+		  //aiRun(in_data, out_data);
 
-	      /* 3 - Post-process the predictions */
-	     //post_process(out_data);
+		  /* 3 - Post-process the predictions */
+		  //post_process(out_data);
+
+	  //}
+
+	  /*if(is_arc < 115){
+		  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+	  }else {
+		  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+	  }*/
+
+
+
+
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -746,7 +814,6 @@ static void MX_ADC1_Init(void)
   /* USER CODE END ADC1_Init 0 */
 
   ADC_MultiModeTypeDef multimode = {0};
-  ADC_AnalogWDGConfTypeDef AnalogWDGConfig = {0};
   ADC_ChannelConfTypeDef sConfig = {0};
 
   /* USER CODE BEGIN ADC1_Init 1 */
@@ -780,20 +847,6 @@ static void MX_ADC1_Init(void)
   */
   multimode.Mode = ADC_MODE_INDEPENDENT;
   if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Analog WatchDog 1
-  */
-  AnalogWDGConfig.WatchdogNumber = ADC_ANALOGWATCHDOG_1;
-  AnalogWDGConfig.WatchdogMode = ADC_ANALOGWATCHDOG_SINGLE_REG;
-  AnalogWDGConfig.Channel = ADC_CHANNEL_15;
-  AnalogWDGConfig.ITMode = ENABLE;
-  AnalogWDGConfig.HighThreshold = 1000;
-  AnalogWDGConfig.LowThreshold = 0;
-  AnalogWDGConfig.FilteringConfig = ADC_AWD_FILTERING_NONE;
-  if (HAL_ADC_AnalogWDGConfig(&hadc1, &AnalogWDGConfig) != HAL_OK)
   {
     Error_Handler();
   }
@@ -968,7 +1021,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 1887;
+  htim2.Init.Period = 679;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -1111,6 +1164,7 @@ static void MX_DMA_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -1120,6 +1174,16 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : LED_Pin */
+  GPIO_InitStruct.Pin = LED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
