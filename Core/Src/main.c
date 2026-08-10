@@ -40,8 +40,9 @@
 #define BLOCK_SIZE  512
 #define ADC_BUF_SIZE (BLOCK_SIZE * 2)
 #define FFT_BINS     (BLOCK_SIZE / 2)   // half of block size always, each bin represents = sampling frequency/no. of bins
-
 #define MAG_SIZE (BLOCK_SIZE / 2)
+
+
 /**
  * UART
  */
@@ -64,8 +65,14 @@
  */
 #define INPUT_SCALE       (1.0f / 255.0f) // 1/(no. of inputs-1)
 #define INPUT_ZERO_POINT  (-128.0f)
+#define IS_ARC_BUFFER_SIZE 50
 
-
+/**
+ * Impulse detection
+ */
+#define PREV_FFT_BUFFER_SIZE 100
+#define AVG_BUFFER_SIZE 30
+#define AVG_THRESHOLD 30.0f // Set your desired threshold as float32_t
 /**
  * SAI
  */
@@ -130,11 +137,13 @@ static stai_ptr stai_output[STAI_NETWORK_OUT_NUM];
 /**
  * ADC
  */
-volatile uint16_t g_adcBuffer[ADC_BUF_SIZE];
+volatile uint16_t g_adcBuffer[ADC_BUF_SIZE] __attribute__((section(".sram2_data")));
 float32_t g_dspInput[BLOCK_SIZE];
 float32_t g_fftOutput[BLOCK_SIZE]; // Real/Imaginary pairs (Size must match FFT needs)
 float32_t g_fftMag[BLOCK_SIZE/2 + 1];
 float32_t g_hannWindow[BLOCK_SIZE];
+volatile uint32_t glow = 0;
+float32_t prev_g_fftMag = -1.0f;
 
 
 // Threads synchronization variables
@@ -154,9 +163,21 @@ arm_rfft_fast_instance_f32 saiFftInstance;
 float32_t g_fftMagAverage[MAG_SIZE + 1];
 uint8_t g_isFirstRun = 1;
 
+static float32_t prev_g_fftMag_buffer[PREV_FFT_BUFFER_SIZE] = {0.0f};
+static int history_idx = 0;
+static int sample_counter = 0;
+
+
+static float32_t avg_running_sum = 0.0f;
+float32_t avg_g_fftMag = 0.0f;
+
+
 /* Smoothing settings: 0.15 gives a steady, calm floor while tracking 30k-40kHz peaks */
 const float32_t ALPHA = 0.15f;
 const float32_t ONE_MINUS_ALPHA = 1.0f - 0.15f;
+
+
+
 
 /**
  * UART
@@ -167,17 +188,24 @@ volatile uint8_t dma_busy = 0;
 /**
  * AI inference
  */
+volatile uint8_t large_impulse_flag = 0;
+volatile uint8_t high_avg_flag = 0;
+volatile uint8_t ai_ready_flag = 0;
 
-uint8_t  large_impulse_flag = 0;
+static uint8_t frame_counter = 0;
+
 int8_t is_arc = -128;
-uint8_t counter = 0;
-volatile uint8_t ai_ready_flag = 1;
-/**
- * ADC
- */
-uint16_t dma_buffer[2 * DMA_BUFFER_SIZE];
+int8_t is_arc_buffer[IS_ARC_BUFFER_SIZE] ={0};
+uint8_t is_arc_counter = 0;
 
-uint32_t Wave_LUT[NS] = {
+
+/**
+ * DAC - for testing only
+ */
+
+//uint16_t dma_buffer[2 * DMA_BUFFER_SIZE];
+
+/*uint32_t Wave_LUT[NS] = {
     2048, 2149, 2250, 2350, 2450, 2549, 2646, 2742, 2837, 2929, 3020, 3108, 3193, 3275, 3355,
     3431, 3504, 3574, 3639, 3701, 3759, 3812, 3861, 3906, 3946, 3982, 4013, 4039, 4060, 4076,
     4087, 4094, 4095, 4091, 4082, 4069, 4050, 4026, 3998, 3965, 3927, 3884, 3837, 3786, 3730,
@@ -187,7 +215,7 @@ uint32_t Wave_LUT[NS] = {
     69, 45, 26, 13, 4, 0, 1, 8, 19, 35, 56, 82, 113, 149, 189,
     234, 283, 336, 394, 456, 521, 591, 664, 740, 820, 902, 987, 1075, 1166, 1258,
     1353, 1449, 1546, 1645, 1745, 1845, 1946, 2047
-};
+};*/
 
 
 
@@ -287,31 +315,8 @@ int aiRun(const void *in_data, void *out_data) {
   return 0;
 }
 
-void quantize_input(const float32_t *float_input, int8_t *int8_output) {
-    // 1. Calculate inverse scale (1 / scale) to replace division with multiplication
-    float32_t inv_scale = 1.0f / INPUT_SCALE;
 
-    // Temporary buffer for intermediate float processing
-    float32_t temp_buffer[256];
-
-    // 2. Multiply entire array by inv_scale: temp = float_input * inv_scale
-    arm_scale_f32(float_input, inv_scale, temp_buffer, 256);
-
-    // 3. Add zero-point and clip to int8 range
-    // starts with 125 because we cut of from frequency bin 125
-    for (int i = 125; i < 256; i++) {
-        // Round to nearest integer
-        float32_t rounded = roundf(temp_buffer[i]) + INPUT_ZERO_POINT;
-
-        // Manual clipping to prevent overflow
-        if (rounded > 127.0f)  rounded = 127.0f;
-        if (rounded < -128.0f) rounded = -128.0f;
-
-        int8_output[i-125] = (int8_t)rounded;
-    }
-}
-
-void quantize_input_2(const float32_t *float_input, int8_t *int8_output, uint32_t length) {
+void quantize_input(const float32_t *float_input, int8_t *int8_output, uint32_t length) {
     float32_t inv_scale = 1.0f / INPUT_SCALE;
 
     // Temporary buffer sized EXACTLY to the 131 elements we actually care about
@@ -345,16 +350,15 @@ int acquire_and_process_data(void *in_data)
 	int8_t *dst_buffer = (int8_t *)in_data;
 
 	// Pass the float array, casted output buffer, and the exact slice size (131)
-	quantize_input_2(g_fftMag, dst_buffer, 131);
+	quantize_input(g_fftMag, dst_buffer, 131);// 131 for the 131 frequency bins
 
 	return 0;
 }
 
 int post_process(void *out_data){
 	//int8_t *outputs = (int8_t *)out_data;
-
+	is_arc = ((int8_t*)out_data)[0];
 	//printf("%d\n",((int8_t*)out_data)[0]);
-	ai_ready_flag = 1;
 	return 0;
 }
 
@@ -466,17 +470,113 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
     // Copy the stable average back to g_fftMag so your normalization blocks use it
     arm_copy_f32(g_fftMagAverage, g_fftMag, MAG_SIZE);
 
-    //normalize_array_256_fast(g_fftMag);
+    float32_t current_mag = g_fftMag[152];
+
+    /** IMPULSE DETECTION**/
+
+    // if (sample_counter >= PREV_FFT_BUFFER_SIZE) {
+    //     // 1. Calculate the middle index (halfway back in time)
+    //     int mid_idx = (history_idx + (PREV_FFT_BUFFER_SIZE / 2)) % PREV_FFT_BUFFER_SIZE;
+
+    //     // 2. Extract the three points
+    //     float32_t oldest = prev_g_fftMag_buffer[history_idx]; // Point A (low)
+    //     float32_t mid    = prev_g_fftMag_buffer[mid_idx];     // Point B (high / candidate peak)
+    //     float32_t current = g_fftMag[152];                     // Point C (low)
+
+    //     // 3. Low-High-Low condition: Mid must be 3.2x higher than both Oldest and Current
+    //     if ((mid > 2.5f * oldest) && (mid > 2.0f * current)) {
+    //         large_impulse_flag = 1;
+    //     }
+    // } else {
+    //     sample_counter++;
+    // }
+
+    // // Update ring buffer
+    // prev_g_fftMag_buffer[history_idx] = g_fftMag[152];
+    // history_idx = (history_idx + 1) % PREV_FFT_BUFFER_SIZE;
 
 
-    /*if(g_fftMag[125]>0.07f){
-    	large_impulse_flag = 1;
-    }else{
-    	counter++;
-		if(counter>254){
-			is_arc = -128;
-		}
-    }*/
+    // /**
+    //  * AVERGAE
+    //  */
+
+    // if (avg_sample_counter >= AVG_BUFFER_SIZE) {
+    //     // Subtract oldest float32_t value (30 steps ago)
+    //     avg_running_sum -= avg_history_buffer[avg_history_idx];
+
+    //     // Add current float32_t value
+    //     avg_running_sum += current_mag;
+
+    //     // Compute current 30-step average using single-precision division
+    //     avg_g_fftMag = avg_running_sum / (float32_t)AVG_BUFFER_SIZE;
+
+    //     // Trigger if average exceeds threshold
+    //     if (avg_g_fftMag > AVG_THRESHOLD) {
+    //         large_impulse_flag = 0;
+    //     }
+    // } else {
+    //     // Warm-up phase: accumulate until the buffer has 30 samples
+    //     avg_running_sum += current_mag;
+    //     avg_sample_counter++;
+
+    //     if (avg_sample_counter == AVG_BUFFER_SIZE) {
+    //         avg_g_fftMag = avg_running_sum / (float32_t)AVG_BUFFER_SIZE;
+    //     }
+    // }
+
+    // // Store current value and advance ring buffer pointer
+    // avg_history_buffer[avg_history_idx] = current_mag;
+    // avg_history_idx = (avg_history_idx + 1) % AVG_BUFFER_SIZE;
+
+    /** MERGED IMPULSE DETECTION + AVERAGE AMPLITUDE**/
+    if (sample_counter >= PREV_FFT_BUFFER_SIZE) {
+        // Retrieve the value from 30 steps ago BEFORE overwriting it
+        float32_t oldest_30 = prev_g_fftMag_buffer[history_idx];
+
+        /** 1. LOW-HIGH-LOW IMPULSE DETECTION **/
+        // In a 30-element buffer, history_idx + 10 = 20 steps ago, history_idx + 20 = 10 steps ago
+        uint32_t idx_20_ago = (history_idx + 10) % PREV_FFT_BUFFER_SIZE;
+        uint32_t idx_10_ago = (history_idx + 20) % PREV_FFT_BUFFER_SIZE;
+
+        float32_t oldest  = prev_g_fftMag_buffer[idx_20_ago]; // Point A: 20 steps ago
+        float32_t mid     = prev_g_fftMag_buffer[idx_10_ago]; // Point B: 10 steps ago (peak)
+        float32_t current = current_mag;                      // Point C: current step
+
+        if ((mid > 2.5f * oldest) && (mid > 2.0f * current)) {
+            large_impulse_flag = 1;
+        }
+
+        /** 2. MOVING AVERAGE DETECTOR **/
+        // Subtract 30-step-old value and add current value
+        avg_running_sum -= oldest_30;
+        avg_running_sum += current_mag;
+
+        // Compute average
+        avg_g_fftMag = avg_running_sum / (float32_t)PREV_FFT_BUFFER_SIZE;
+
+        if (avg_g_fftMag > AVG_THRESHOLD) {
+            high_avg_flag = 1;
+        }
+
+    } else {
+        // Warm-up phase: accumulate until the buffer is filled with 30 samples
+        avg_running_sum += current_mag;
+        sample_counter++;
+
+        if (sample_counter == PREV_FFT_BUFFER_SIZE) {
+            avg_g_fftMag = avg_running_sum / (float32_t)PREV_FFT_BUFFER_SIZE;
+        }
+    }
+
+
+    prev_g_fftMag_buffer[history_idx] = current_mag;
+    history_idx = (history_idx + 1) % PREV_FFT_BUFFER_SIZE;
+
+	normalize_array_256_fast(g_fftMag);
+
+
+
+
 
 
 
@@ -488,7 +588,7 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
 
 	// 1. Send a unique Start-of-Frame header (e.g., 2 bytes: 0xAA, 0xBB)
 	// This allows the computer to find the exact start of your array
-	uint8_t header[2] = {0xAA, 0xBB};
+	/*uint8_t header[2] = {0xAA, 0xBB};
 	_write(1, (char *)header, 2);
 
 	// 2. Blast the ENTIRE float array out of memory in a single shot!
@@ -499,7 +599,7 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
 	// 3. Send an End-of-Frame footer (e.g., 2 bytes: 0xCC, 0xDD)
 	// This acts as a validation check for the PC
 	uint8_t footer[2] = {0xCC, 0xDD};
-	_write(1, (char *)footer, 2);
+	_write(1, (char *)footer, 2);*/
 
 
 }
@@ -639,10 +739,10 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 }
 
 //Increment counter if value into ADC buffer exceeds a threshold
-void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef* hadc)
-{
+//void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef* hadc)
+//{
 	//glow++;
-}
+//}
 
 
 /* USER CODE END 0 */
@@ -697,9 +797,11 @@ int main(void)
   HAL_TIM_Base_Start(&htim2);
 
 
-  //aiInit();
+  aiInit();
 
-
+  //for(int i=0;i<IS_ARC_BUFFER_SIZE;i++){
+	  //is_arc_buffer[i] = 0;
+  //}
 
 
   /** Test FFT with sinusoidal wave: sinusoidal wave frequency = trigger frequency/NS */
@@ -710,18 +812,7 @@ int main(void)
 
   while (1)
   {
-	  //if(ai_ready_flag == 1){
-		  //ai_ready_flag = 0;
-		  /* 1 - Acquire, pre-process and fill the input buffers */
-		  //acquire_and_process_data(in_data);
 
-		  /* 2 - Call inference engine */
-		  //aiRun(in_data, out_data);
-
-		  /* 3 - Post-process the predictions */
-		  //post_process(out_data);
-
-	  //}
 
 	  /*if(is_arc < 115){
 		  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
@@ -740,6 +831,7 @@ int main(void)
 	  // Check if a new half-buffer snapshot is safely ready for math processing
 	  if (g_fftReadyFlag == 1)
 	  {
+		  g_fftReadyFlag = 0;
 		  // Execute the intensive math calculations out here in user thread space
 		  process_ultrasonic_data(gp_activeAdcData);
 
@@ -747,11 +839,57 @@ int main(void)
 		  // Trace your 40kHz spikes or ultrasonic squeaks here.
 
 		  // Reset the flag to unlock the next callback interception
-		  g_fftReadyFlag = 0;
+
+
+		  frame_counter++;
+		  if (frame_counter >= 5 && (large_impulse_flag>0 || high_avg_flag>0)) { // Run AI every 4th FFT frame  //
+		      frame_counter = 0;
+
+
+
+		      acquire_and_process_data(in_data);
+		      ai_ready_flag = 1;
+
+
+		  }
+
+		 // if (large_impulse_flag>0) { // Run AI every 4th FFT frame  //
+			// acquire_and_process_data(in_data);
+			 //ai_ready_flag = 1;
+		  //}
+	  }
+	  if(ai_ready_flag == 1){
+		  ai_ready_flag = 0;
+		  /* 1 - Acquire, pre-process and fill the input buffers */
+
+
+		  /* 2 - Call inference engine */
+		  aiRun(in_data, out_data);
+
+		  /* 3 - Post-process the predictions */
+		  post_process(out_data);
+
+		  is_arc_buffer[is_arc_counter%IS_ARC_BUFFER_SIZE] = is_arc;
+		  is_arc_counter++;
+
+		  int16_t sum_is_arc = 0;
+
+		  for (int i = 0; i < IS_ARC_BUFFER_SIZE; i++) {
+		     sum_is_arc += is_arc_buffer[i];
+		  }
+
+
+		  if (sum_is_arc < -120) {
+			  large_impulse_flag = 0;
+			  is_arc_counter = 0;
+			  high_avg_flag = 0;
+			  //is_arc = -128;
+		  }
+
 	  }
 	 
   }
-  //aiDeinit();
+  aiDeinit();
   /* USER CODE END 3 */
 }
 
@@ -814,6 +952,7 @@ static void MX_ADC1_Init(void)
   /* USER CODE END ADC1_Init 0 */
 
   ADC_MultiModeTypeDef multimode = {0};
+  ADC_AnalogWDGConfTypeDef AnalogWDGConfig = {0};
   ADC_ChannelConfTypeDef sConfig = {0};
 
   /* USER CODE BEGIN ADC1_Init 1 */
@@ -847,6 +986,20 @@ static void MX_ADC1_Init(void)
   */
   multimode.Mode = ADC_MODE_INDEPENDENT;
   if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analog WatchDog 1
+  */
+  AnalogWDGConfig.WatchdogNumber = ADC_ANALOGWATCHDOG_1;
+  AnalogWDGConfig.WatchdogMode = ADC_ANALOGWATCHDOG_SINGLE_REG;
+  AnalogWDGConfig.Channel = ADC_CHANNEL_15;
+  AnalogWDGConfig.ITMode = ENABLE;
+  AnalogWDGConfig.HighThreshold = 2100;
+  AnalogWDGConfig.LowThreshold = 0;
+  AnalogWDGConfig.FilteringConfig = ADC_AWD_FILTERING_NONE;
+  if (HAL_ADC_AnalogWDGConfig(&hadc1, &AnalogWDGConfig) != HAL_OK)
   {
     Error_Handler();
   }
