@@ -73,10 +73,11 @@
 #define PREV_FFT_BUFFER_SIZE 100
 #define AVG_BUFFER_SIZE 30
 #define AVG_THRESHOLD 30.0f // Set your desired threshold as float32_t
+
+
 /**
  * SAI
  */
-
 #define DECIMATION_FACTOR   16
 #define PCM_BLOCK_SIZE      64    // 64 PCM output samples per DMA interrupt
 #define PDM_BUF_SIZE        (PCM_BLOCK_SIZE * DECIMATION_FACTOR * 2) // 2048 words
@@ -356,9 +357,9 @@ int acquire_and_process_data(void *in_data)
 }
 
 int post_process(void *out_data){
-	//int8_t *outputs = (int8_t *)out_data;
+
 	is_arc = ((int8_t*)out_data)[0];
-	//printf("%d\n",((int8_t*)out_data)[0]);
+
 	return 0;
 }
 
@@ -799,9 +800,6 @@ int main(void)
 
   aiInit();
 
-  //for(int i=0;i<IS_ARC_BUFFER_SIZE;i++){
-	  //is_arc_buffer[i] = 0;
-  //}
 
 
   /** Test FFT with sinusoidal wave: sinusoidal wave frequency = trigger frequency/NS */
@@ -814,11 +812,7 @@ int main(void)
   {
 
 
-	  /*if(is_arc < 115){
-		  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
-	  }else {
-		  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
-	  }*/
+
 
 
 
@@ -832,35 +826,27 @@ int main(void)
 	  if (g_fftReadyFlag == 1)
 	  {
 		  g_fftReadyFlag = 0;
-		  // Execute the intensive math calculations out here in user thread space
+
 		  process_ultrasonic_data(gp_activeAdcData);
-
-		  // Your 256 magnitude spectra profile is now ready in g_fftMag!
-		  // Trace your 40kHz spikes or ultrasonic squeaks here.
-
-		  // Reset the flag to unlock the next callback interception
 
 
 		  frame_counter++;
-		  if (frame_counter >= 5 && (large_impulse_flag>0 || high_avg_flag>0)) { // Run AI every 4th FFT frame  //
+		  if (frame_counter >= 5 && (large_impulse_flag>0 || high_avg_flag>0)) { // Run AI on every 5th FFT frame
 		      frame_counter = 0;
 
 
-
+		      /* 1 - Acquire, pre-process and fill the input buffers */
 		      acquire_and_process_data(in_data);
 		      ai_ready_flag = 1;
 
 
 		  }
 
-		 // if (large_impulse_flag>0) { // Run AI every 4th FFT frame  //
-			// acquire_and_process_data(in_data);
-			 //ai_ready_flag = 1;
-		  //}
+
 	  }
 	  if(ai_ready_flag == 1){
 		  ai_ready_flag = 0;
-		  /* 1 - Acquire, pre-process and fill the input buffers */
+
 
 
 		  /* 2 - Call inference engine */
