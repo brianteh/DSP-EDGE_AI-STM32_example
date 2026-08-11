@@ -51,7 +51,7 @@
    2. Subtracts DC offset dynamically using ```arm_mean_f32```.
    3. Executes Real FFT (```arm_rfft_fast_f32```).Calculates complex magnitudes (arm_cmplx_mag_f32).
    4. Normalizes array to $0.0$ to $1.0$.Sends payload over UART DMA.
-   5. ```quantize_input_256()```: Converts floating-point FFT magnitudes to INT8 for ST Edge AI model input tensors.
+   5. ```quantize_input()```: Converts floating-point FFT magnitudes to INT8 for ST Edge AI model input tensors.
 3. ```aiInit() / aiRun()```: Handles model activation allocation and synchronization with ST Edge AI runtime.
 
 # ⚙️Toolchain: STM32CubeIDE
