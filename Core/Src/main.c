@@ -98,10 +98,8 @@ DMA_HandleTypeDef hdma_adc1;
 CRC_HandleTypeDef hcrc;
 
 DAC_HandleTypeDef hdac1;
-DMA_HandleTypeDef hdma_dac1_ch1;
 
 SAI_HandleTypeDef hsai_BlockA1;
-DMA_HandleTypeDef hdma_sai1_a;
 
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim6;
@@ -138,7 +136,7 @@ static stai_ptr stai_output[STAI_NETWORK_OUT_NUM];
 /**
  * ADC
  */
-volatile uint16_t g_adcBuffer[ADC_BUF_SIZE] __attribute__((section(".sram2_data")));
+volatile uint16_t g_adcBuffer[ADC_BUF_SIZE];
 float32_t g_dspInput[BLOCK_SIZE];
 float32_t g_fftOutput[BLOCK_SIZE]; // Real/Imaginary pairs (Size must match FFT needs)
 float32_t g_fftMag[BLOCK_SIZE/2 + 1];
@@ -382,7 +380,7 @@ void init_ultrasonic_window(void) {
 void init_dsp(void) {
     // Initialize the Real FFT instance for a 512-point conversion
     arm_rfft_fast_init_f32(&fftInstance, BLOCK_SIZE);
-    arm_rfft_fast_init_f32(&saiFftInstance, SAI_FFT_SIZE);
+    //arm_rfft_fast_init_f32(&saiFftInstance, SAI_FFT_SIZE);
 }
 
 void normalize_array_256_fast(float32_t *array) {
@@ -470,8 +468,32 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
 
     // Copy the stable average back to g_fftMag so your normalization blocks use it
     arm_copy_f32(g_fftMagAverage, g_fftMag, MAG_SIZE);
+    //normalize_array_256_fast(g_fftMag);
+    /**
+       * PRINT TO PC VIA UART
+       */
 
-    float32_t current_mag = g_fftMag[152];
+    	// 1. Send a unique Start-of-Frame header (e.g., 2 bytes: 0xAA, 0xBB)
+    	// This allows the computer to find the exact start of your array
+    	uint8_t header[2] = {0xAA, 0xBB};
+    	_write(1, (char *)header, 2);
+
+    	// 2. Blast the ENTIRE float array out of memory in a single shot!
+    	// No loops, no formatting math, no printf overhead.
+    	uint32_t bytes_to_send = (BLOCK_SIZE / 2) * sizeof(float32_t);
+    	_write(1, (char *)g_fftMagAverage, bytes_to_send);
+
+    	// 3. Send an End-of-Frame footer (e.g., 2 bytes: 0xCC, 0xDD)
+    	// This acts as a validation check for the PC
+    	uint8_t footer[2] = {0xCC, 0xDD};
+    	_write(1, (char *)footer, 2);
+
+
+
+
+
+
+    //float32_t current_mag = g_fftMag[152];
 
     /** IMPULSE DETECTION**/
 
@@ -530,78 +552,48 @@ void process_ultrasonic_data(uint16_t *p_raw_buffer) {
     // avg_history_idx = (avg_history_idx + 1) % AVG_BUFFER_SIZE;
 
     /** MERGED IMPULSE DETECTION + AVERAGE AMPLITUDE**/
-    if (sample_counter >= PREV_FFT_BUFFER_SIZE) {
-        // Retrieve the value from 30 steps ago BEFORE overwriting it
-        float32_t oldest_30 = prev_g_fftMag_buffer[history_idx];
+    // if (sample_counter >= PREV_FFT_BUFFER_SIZE) {
+    //     // Retrieve the value from 30 steps ago BEFORE overwriting it
+    //     float32_t oldest_30 = prev_g_fftMag_buffer[history_idx];
 
-        /** 1. LOW-HIGH-LOW IMPULSE DETECTION **/
-        // In a 30-element buffer, history_idx + 10 = 20 steps ago, history_idx + 20 = 10 steps ago
-        uint32_t idx_20_ago = (history_idx + 10) % PREV_FFT_BUFFER_SIZE;
-        uint32_t idx_10_ago = (history_idx + 20) % PREV_FFT_BUFFER_SIZE;
+    //     /** 1. LOW-HIGH-LOW IMPULSE DETECTION **/
+    //     // In a 30-element buffer, history_idx + 10 = 20 steps ago, history_idx + 20 = 10 steps ago
+    //     uint32_t idx_20_ago = (history_idx + 10) % PREV_FFT_BUFFER_SIZE;
+    //     uint32_t idx_10_ago = (history_idx + 20) % PREV_FFT_BUFFER_SIZE;
 
-        float32_t oldest  = prev_g_fftMag_buffer[idx_20_ago]; // Point A: 20 steps ago
-        float32_t mid     = prev_g_fftMag_buffer[idx_10_ago]; // Point B: 10 steps ago (peak)
-        float32_t current = current_mag;                      // Point C: current step
+    //     float32_t oldest  = prev_g_fftMag_buffer[idx_20_ago]; // Point A: 20 steps ago
+    //     float32_t mid     = prev_g_fftMag_buffer[idx_10_ago]; // Point B: 10 steps ago (peak)
+    //     float32_t current = current_mag;                      // Point C: current step
 
-        if ((mid > 2.5f * oldest) && (mid > 2.0f * current)) {
-            large_impulse_flag = 1;
-        }
+    //     if ((mid > 2.5f * oldest) && (mid > 2.0f * current)) {
+    //         large_impulse_flag = 1;
+    //     }
 
-        /** 2. MOVING AVERAGE DETECTOR **/
-        // Subtract 30-step-old value and add current value
-        avg_running_sum -= oldest_30;
-        avg_running_sum += current_mag;
+    //     /** 2. MOVING AVERAGE DETECTOR **/
+    //     // Subtract 30-step-old value and add current value
+    //     avg_running_sum -= oldest_30;
+    //     avg_running_sum += current_mag;
 
-        // Compute average
-        avg_g_fftMag = avg_running_sum / (float32_t)PREV_FFT_BUFFER_SIZE;
+    //     // Compute average
+    //     avg_g_fftMag = avg_running_sum / (float32_t)PREV_FFT_BUFFER_SIZE;
 
-        if (avg_g_fftMag > AVG_THRESHOLD) {
-            high_avg_flag = 1;
-        }
+    //     if (avg_g_fftMag > AVG_THRESHOLD) {
+    //         high_avg_flag = 1;
+    //     }
 
-    } else {
-        // Warm-up phase: accumulate until the buffer is filled with 30 samples
-        avg_running_sum += current_mag;
-        sample_counter++;
+    // } else {
+    //     // Warm-up phase: accumulate until the buffer is filled with 30 samples
+    //     avg_running_sum += current_mag;
+    //     sample_counter++;
 
-        if (sample_counter == PREV_FFT_BUFFER_SIZE) {
-            avg_g_fftMag = avg_running_sum / (float32_t)PREV_FFT_BUFFER_SIZE;
-        }
-    }
-
-
-    prev_g_fftMag_buffer[history_idx] = current_mag;
-    history_idx = (history_idx + 1) % PREV_FFT_BUFFER_SIZE;
-
-	normalize_array_256_fast(g_fftMag);
+    //     if (sample_counter == PREV_FFT_BUFFER_SIZE) {
+    //         avg_g_fftMag = avg_running_sum / (float32_t)PREV_FFT_BUFFER_SIZE;
+    //     }
+    // }
 
 
-
-
-
-
-
-
-
-  /**
-   * PRINT TO PC VIA UART
-   */
-
-	// 1. Send a unique Start-of-Frame header (e.g., 2 bytes: 0xAA, 0xBB)
-	// This allows the computer to find the exact start of your array
-	/*uint8_t header[2] = {0xAA, 0xBB};
-	_write(1, (char *)header, 2);
-
-	// 2. Blast the ENTIRE float array out of memory in a single shot!
-	// No loops, no formatting math, no printf overhead.
-	uint32_t bytes_to_send = (BLOCK_SIZE / 2) * sizeof(float32_t);
-	_write(1, (char *)g_fftMag, bytes_to_send);
-
-	// 3. Send an End-of-Frame footer (e.g., 2 bytes: 0xCC, 0xDD)
-	// This acts as a validation check for the PC
-	uint8_t footer[2] = {0xCC, 0xDD};
-	_write(1, (char *)footer, 2);*/
-
+    // prev_g_fftMag_buffer[history_idx] = current_mag;
+    // history_idx = (history_idx + 1) % PREV_FFT_BUFFER_SIZE;
 
 }
 
@@ -728,6 +720,8 @@ int _write(int file, char *ptr, int len)
 
     dma_busy = 0;
     return -1;
+
+
 }
 
 // This callback fires automatically when the DMA finishes transferring the data
@@ -798,7 +792,7 @@ int main(void)
   HAL_TIM_Base_Start(&htim2);
 
 
-  aiInit();
+ // aiInit();
 
 
 
@@ -830,52 +824,52 @@ int main(void)
 		  process_ultrasonic_data(gp_activeAdcData);
 
 
-		  frame_counter++;
-		  if (frame_counter >= 5 && (large_impulse_flag>0 || high_avg_flag>0)) { // Run AI on every 5th FFT frame
-		      frame_counter = 0;
+		  // frame_counter++;
+		  // if (frame_counter >= 5 && (large_impulse_flag>0 || high_avg_flag>0)) { // Run AI on every 5th FFT frame
+		  //     frame_counter = 0;
 
 
-		      /* 1 - Acquire, pre-process and fill the input buffers */
-		      acquire_and_process_data(in_data);
-		      ai_ready_flag = 1;
+		  //     /* 1 - Acquire, pre-process and fill the input buffers */
+		  //     acquire_and_process_data(in_data);
+		  //     ai_ready_flag = 1;
 
 
-		  }
+		  // }
 
 
 	  }
-	  if(ai_ready_flag == 1){
-		  ai_ready_flag = 0;
+	  // if(ai_ready_flag == 1){
+		//   ai_ready_flag = 0;
 
 
 
-		  /* 2 - Call inference engine */
-		  aiRun(in_data, out_data);
+		//   /* 2 - Call inference engine */
+		//   aiRun(in_data, out_data);
 
-		  /* 3 - Post-process the predictions */
-		  post_process(out_data);
+		//   /* 3 - Post-process the predictions */
+		//   post_process(out_data);
 
-		  is_arc_buffer[is_arc_counter%IS_ARC_BUFFER_SIZE] = is_arc;
-		  is_arc_counter++;
+		//   is_arc_buffer[is_arc_counter%IS_ARC_BUFFER_SIZE] = is_arc;
+		//   is_arc_counter++;
 
-		  int16_t sum_is_arc = 0;
+		//   int16_t sum_is_arc = 0;
 
-		  for (int i = 0; i < IS_ARC_BUFFER_SIZE; i++) {
-		     sum_is_arc += is_arc_buffer[i];
-		  }
+		//   for (int i = 0; i < IS_ARC_BUFFER_SIZE; i++) {
+		//      sum_is_arc += is_arc_buffer[i];
+		//   }
 
 
-		  if (sum_is_arc < -120) {
-			  large_impulse_flag = 0;
-			  is_arc_counter = 0;
-			  high_avg_flag = 0;
-			  //is_arc = -128;
-		  }
+		//   if (sum_is_arc < -120) {
+		// 	  large_impulse_flag = 0;
+		// 	  is_arc_counter = 0;
+		// 	  high_avg_flag = 0;
+		// 	  //is_arc = -128;
+		//   }
 
-	  }
+	  // }
 	 
   }
-  aiDeinit();
+  //aiDeinit();
   /* USER CODE END 3 */
 }
 
@@ -1160,7 +1154,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 679;
+  htim2.Init.Period = 1889;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -1287,12 +1281,6 @@ static void MX_DMA_Init(void)
   /* DMA1_Channel2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
-  /* DMA1_Channel3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
-  /* DMA1_Channel4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
 
 }
 
